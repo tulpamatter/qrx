@@ -3,15 +3,9 @@
 
 ![](garden.gif)
 
-`qrx` is a minimalist, generative web environment that runs entirely in a single HTML file. It uses your browser's local storage (IndexedDB) to save "files" and integrates with Large Language Models (LLMs) to generate and modify content. The entire interface is controlled through URL parameters, making it a highly portable and command-driven tool for creation.
+`qrx` is a minimalist, generative web environment that runs entirely in a single HTML file. It uses your browser's IndexedDB to save "files" and integrates with Large Language Models (LLMs) to create and modify content.
 
-## Core Concepts
-
-*   **Single File System:** The entire application is a single `index.html` file.
-*   **URL as API:** You control the environment by changing the URL's hash (`#`) and query parameters (`?`).
-*   **Local Persistence:** All content is saved directly in your browser's IndexedDB, keyed by the page name in the URL hash.
-*   **LLM Integration:** Use the `?p` parameter to send prompts to a configured LLM (e.g., OpenRouter, Ollama) to generate code, text, or entire pages.
-*   **Live Preview:** A split-pane view shows the live rendered output in an `iframe` and the raw code in a `textarea`.
+The entire system is a reactive, stateful application controlled by a **sequential command stream** in the URL. It updates live as you edit the address bar, turning it into a powerful, shareable command line for orchestrating agentic workflows.
 
 ## Quick Start
 
@@ -36,138 +30,92 @@
 3.  **Run the development server:**
     ```bash
     npm run dev
-    ```    This will start a local server (usually at `http://localhost:5173`). Open this URL in your browser to start using `qrx`.
+    ```
+    This will start a local server. Open the provided URL in your browser to start using `qrx`.
 
 4.  **Build the project:**
     ```bash
     npm run build
     ```
-    This command performs several actions:
-    *   Builds and bundles the application using Vite.
-    *   Aggressively minifies the output into a single `dist/index.html` file.
-    *   Generates a QR code from the final HTML content and saves it as `dist/qrx.qrcode.png`.
-
-5.  **Preview the QR Code in your terminal:**
-    After a build, you can preview the final QR code directly in your terminal.
-    ```bash
-    npm run qrcode
-    ```
+    This command builds the application, minifies it into a single `dist/index.html` file, and generates a corresponding QR code named `dist/qrx.qrcode.png`.
 
 ## LLM Configuration
 
-To use the generative features (`?p` parameter), you must configure an LLM provider. This is done in one of three ways, in order of priority:
+To use the generative features (`?p`), you must configure an LLM provider. This is done by setting an API key, hostname, and model name. These values are retrieved in order of priority:
 
-1.  **URL Parameters (Temporary):** Add `k` (API key), `h` (API hostname), and `m` (API model name) to the URL for a single session.
-    *   `http://localhost:5173/?k=YOUR_KEY&m=MODEL_NAME#home`
+1.  **URL Parameters (Temporary):** Add `k` (API key), `h` (hostname), and `m` (model) to the URL for the current command sequence.
+2.  **Local Storage (Persistent):** Set the values in your browser's developer console for them to be saved for future sessions.
 
-2.  **Local Storage (Persistent):** Set the values in your browser's developer console. They will be saved for future sessions.
-    ```javascript
-    localStorage.setItem('k', 'YOUR_API_KEY');
-    localStorage.setItem('h', 'YOUR_API_ENDPOINT');
-    localStorage.setItem('m', 'MODEL_NAME');
-    ```
+```javascript
+// Example configuration for Google's Generative AI API
+localStorage.setItem('k', 'YOUR_API_KEY');
+localStorage.setItem('h', 'generativelanguage.googleapis.com'); // Or any openAI api capable endpoint
+localStorage.setItem('m', 'gemini-2.5-flash'); // Or any other compatible model
+```
 
-3.  **First-Use Prompts (Interactive):** If no configuration is found when you first use `?p`, the application will prompt you to enter the API Key and Model. These will then be saved to `localStorage`.
+## URL Command Stream API
 
-### Example Provider Setups
-
-*   **Ollama (Local):**
-    *   **h:** `http://localhost:11434/v1/chat/completions` (Note the `/v1/` path)
-    *   **k:** `ollama`
-    *   **m:** Any model you have pulled (e.g., `llama3`)
-
-*   **OpenRouter (Cloud):**
-    *   **h:** `https://openrouter.ai/api/v1/chat/completions`
-    *   **k:** Your OpenRouter API key (e.g., `sk-or-...)`
-    *   **m:** Any model from OpenRouter (e.g., `openai/gpt-4o`)
-
-## URL API Reference
-
-The primary way to interact with `qrx` is by manipulating the URL in your browser's address bar.
+Interaction with `qrx` is performed by constructing a command stream in the URL's hash. The parameters are executed **sequentially, in the order they appear**. The system maintains a live, in-memory "accumulator" that is transformed by each command.
 
 ---
 
-### `#<page_name>` (Hash)
+### `#<page_name>`
 
-This determines the current "file" you are working on. Content is loaded from and saved to IndexedDB under this key.
+This determines the initial page to load and the default target for all operations. It's the page that is ultimately rendered to the screen after the command stream finishes.
 
-*   `#home` is the default page.
-*   `#styles.css` refers to a page for CSS styles.
-*   Changing the hash in the URL will load the corresponding page.
+*   `#home` is the default page if no hash is provided.
 
 ---
 
-### `?p=<prompt>`
+### Action Commands
+These commands perform an operation, often transforming the accumulator.
 
-The **prompt** parameter instructs the configured LLM to generate or modify the content of the current page. The LLM's response will completely replace the existing content.
+#### `?w=<content>`
+**Write:** Destructively overwrites the content of the current target page with the provided literal string. This is a permanent change.
 
-*   **Purpose:** The main engine for generative creation.
-*   **Example:** Create a simple counter app on a new page named `counter`.
-    ```
-    http://localhost:5173/?p=create a simple javascript counter with a button#counter
-    ```
-*   **Workflow:** After the LLM responds, the content is saved, and the `?p` parameter is automatically removed from the URL as the page reloads.
+*   **Example:** `/#settings?w={"theme":"dark"}`
 
----
+#### `?p=<prompt>`
+**Prompt:** Executes a generative prompt. It sends the current, live content of the accumulator to the LLM and overwrites the target page's content with the response. This is a permanent change.
 
-### `?w=<url_encoded_content>`
+*   **Example:** `/#story?p=continue the story`
 
-The **write** parameter directly injects URL-decoded content onto the current page, completely overwriting its previous content. This bypasses the LLM.
+#### `?x=<script>`
+**Execute:** Executes a JavaScript string. The script has access to the live accumulator (`$a`), the savable source (`$s`), and the database helper functions (`$r`, `o`) for complex, agentic operations.
 
-*   **Purpose:** Precise, direct control for bootstrapping content or loading exact code.
-*   **Example:** Write `<h1>Hello</h1>` to the `direct` page.
-    ```
-    http://localhost:5173/?w=%3Ch1%3EHello%3C%2Fh1%3E#direct
-    ```
-*   **Workflow:** The content is written to storage, and the `?w` parameter is removed from the URL as the page reloads.
+*   **Example:** `/#home?x=alert($a)`
 
 ---
 
-### `?x=<url_encoded_script>`
+### State-Setting Commands
+These commands modify the state for subsequent commands in the stream.
 
-The **execute** parameter directly executes URL-decoded JavaScript within the context of the preview `iframe`.
+#### `?t=<page_name>`
+**Target:** Redirects all subsequent read/write actions (`w`, `p`) to a different page. This is the key to multi-file workflows.
+*   `?t` (with no value) resets the target to the main page from the hash.
 
-*   **Purpose:** The primary mechanism for creating "installer scripts" or "URL packs." It allows a single URL to run commands, write multiple files to storage, or dynamically manipulate the preview without saving any content itself.
-*   **Key Behavior:** The script runs inside the sandboxed `iframe`. After execution, the `?x` parameter is removed from the URL *without* a page reload. This allows the script to complete its tasks, such as redirecting the user, without being interrupted.
-*   **Example (Simple DOM manipulation):** Change the background of the preview pane to red.
-    ```
-    http://localhost:5173/?x=document.body.style.background%3D'red'#home
-    ```
-*   **Example (Installer Script):** Write two separate files (`styles` and `app`) to storage and then navigate to the new app. The `ui` object from the main window can be accessed via `parent.ui`.
-    ```
-    http://localhost:5173/?x=parent.ui.o('readwrite'%2C'styles'%2C'body%7Bcolor%3Ablue%7D')%3Bparent.ui.o('readwrite'%2C'app'%2C'%3Ch1%3EInstalled%21%3C%2Fh1%3E')%3Blocation.hash%3D'app'%3B#installer
-    ```
+*   **Example (agent scratchpad):** `/#app?t=scratch&w=thinking...&t&p=based on @scratch, build the app`
 
----
+#### `?k`, `?h`, `?m`
+**Environment:** Sets the API Key (`k`), Host (`h`), and Model (`m`) for any `?p` commands that follow in the stream.
 
-### `?b=<key1>,<key2>,...`
+*   **Example:** `/#test?m=gemini-pro&p=run a complex task&m=gemini-2.5-flash&p=summarize the result`
 
-The **boot dependencies** parameter loads content from other saved pages and prepends it to the preview `iframe` before the main page content. This enables modularity and code reuse.
+#### `?s=<page_name>`
+**System Prompt:** Sets the system prompt for subsequent `?p` commands by loading the content of the specified page.
 
-*   **Purpose:** Inject shared CSS, JavaScript libraries, or HTML components without duplicating them in every file. The special key `boot` is always loaded first if it exists.
-*   **Example:** Load content from `styles` and `utils` before rendering the `app` page.
-    ```
-    http://localhost:5173/?b=styles,utils#app
-    ```*   **Workflow:** The content of `boot` (if present), `styles`, `utils`, and finally `app` are combined in the `iframe` preview. The editor pane will still only show the content for `app`. The `?b` parameter remains in the URL.
+*   **Example:** `/#code?s=coder-persona&p=write a function`
 
 ---
 
-### `?k`, `?h`, `?m`
+### Composition & Context
 
-These **environment override** parameters temporarily override the LLM configuration settings for the current session, taking precedence over `localStorage`.
+#### `?b=<page_name>`
+**Boot:** A temporary, runtime-only prepend. It loads the content of `<page_name>` and prepends it to the live accumulator. This is ideal for loading CSS, libraries, or dependencies. **This change is not saved** to the target page's content.
 
-*   **Purpose:** Quickly test different models, endpoints, or API keys.
-*   **Example:** Use Gemini Pro for a specific prompt.
-    ```
-    http://localhost:5173/?m=google/gemini-2.5-pro&p=summarize this page#summary
-    ```
+*   **Example:** `/#app?b=styles.css&b=runtime.js`
 
-## Development Notes
+#### `@<page_name>` (in prompts)
+**Inject:** When used inside a `?p` prompt, it injects the content of the specified page directly into the prompt string before sending it to the LLM. This is for providing specific context.
 
-*   **QR Code Size Limit:** The primary constraint of this project is the data capacity of a QR code. The theoretical maximum for a Version 40 QR code is 2,953 bytes with low error correction. The entire `dist/index.html` file must fit within this limit.
-*   **Minification:** The `build` process uses `vite` and `html-minifier-terser` to aggressively shrink the final HTML file size. Every byte counts.
-*   **Error Correction:** The QR code generation script is set to use the lowest error correction level (`L`) to maximize data capacity.
-
-## License
-
-This project is licensed under the ISC License.
+*   **Example:** `/#summary?p=summarize this article: @long-article`

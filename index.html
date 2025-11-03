@@ -5,14 +5,13 @@
 </head>
 <body>
 <script>;(async () => {
-  // Setup
-  let d = document, b = d.body,
-    u = new URL(location), p = u.searchParams,
-    g = (k => p.get(k) || localStorage.getItem(k)),
+  // Basic setup and shorthands
+  let d = document,
+      b = d.body,
+      g = k => localStorage.getItem(k)
 
-  // Database Connection
-  // Opens 'os' db, creates 'f' (files) and 'h' (history) stores if needed.
-  db = await new Promise(r => {
+  // Connect to the IndexedDB database
+  let db = await new Promise(r => {
     let R = indexedDB.open('os', 1)
     R.onupgradeneeded = e => {
       let s = e.target.result
@@ -20,76 +19,104 @@
       s.createObjectStore('h', { autoIncrement: true })
     }
     R.onsuccess = e => r(e.target.result)
-  }),
+  })
 
-  // DB Operation Helper
-  // o(store, mode, type, ...args) -> e.g., o('f', 'readonly', 'get', 'home')
-  o = (s, m, t, ...a) => new Promise(r => {
-    db.transaction(s, m).objectStore(s)[t](...a).onsuccess = e => r(e.target.result)
-  }),
+  // Database operation helpers
+  let o = (s, t, ...a) => new Promise(r => {
+        db.transaction(s, 'readwrite').objectStore(s)[t](...a).onsuccess = e => r(e.target.result)
+      }),
+      $r = k => o('f', 'get', k).then(r => r?.value || '')
 
-  // Core Logic
-  // Get key from URL hash, default to 'home'
-  k = (location.hash.slice(1) || 'home'),
-  v, // Will hold the main page content/value
-  clean = false // Flag to clean the URL
+  // The main execution function
+  let run = async () => {
+    // Log the current URL to the history before execution
+    await o('h', 'add', { t: new Date(), u: location.href })
 
-  // Log the visit to history
-  await o('h', 'readwrite', 'add', { t: new Date(), u: location.href })
+    // Parse the page key and command string from the URL
+    let u = location.hash.slice(1),
+        [$c, $cmd] = u.split('?'),
+        $p = $c || 'home'
 
-  // ?w=... (write)
-  if (p.has('w')) {
-    v = decodeURIComponent(p.get('w'))
-    await o('f', 'readwrite', 'put', { k, value: v })
-    p.delete('w')
-    clean = true
+    // Initialize the two states
+    let $s = await $r($p)      // The savable document content
+    let $a = $s             // The live, in-memory content for this run
+
+    // Main execution block, only runs if there are commands
+    if ($cmd) {
+      // Initialize the state for this command stream
+      let S = {
+        h: g('h') || 'generativelanguage.googleapis.com',
+        m: g('m') || 'gemini-2.5-flash',
+        k: g('k'),
+        s: '',
+        t: $p
+      }
+
+      // Create an ordered queue of commands
+      let cmds = $cmd.split('&')
+
+      // Loop through and execute each command
+      for (let cmd of cmds) {
+        let [K, ...V] = cmd.split('='),
+            v = decodeURIComponent(V.join('='))
+        
+        // State-Setting Commands
+        if ('hmks'.includes(K)) S[K] = v
+        else if (K === 't') S.t = v || $p
+        // Action Commands
+        else if (K === 'w') {
+          $s = v
+          $a = v
+          await o('f', 'put', { k: S.t, value: $s })
+        } else if (K === 'b') {
+          let B = await $r(v)
+          $a = B + $a
+        } else if (K === 'x') {
+          eval(v)
+        } else if (K === 'p') {
+          let cc = $a
+          let sp = await $r(S.s)
+          let pt = v
+          let injs = v.match(/@\w+/g) || []
+
+          for (let inj of injs) {
+            let injKey = inj.slice(1)
+            let injContent = await $r(injKey)
+            pt = pt.replace(inj, injContent)
+          }
+
+          let B = {
+            contents: [{
+              parts: [{ text: `<system>${sp}</system><page>${cc}</page><prompt>${pt}</prompt>` }]
+            }]
+          }
+          
+          let Z = await fetch(`https://${S.h}/v1beta/models/${S.m}:generateContent?key=${S.k}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(B)
+          })
+          let j = await Z.json()
+          if (!Z.ok) throw j.error
+          let R = j.candidates[0].content.parts[0].text
+          
+          $s = $a = R
+          await o('f', 'put', { k: S.t, value: $s })
+        }
+      }
+      // Clean the URL, removing commands
+      history.replaceState(null, '', `/#${$p}`)
+    }
+
+    // Paint the final state of the accumulator to the DOM
+    b.innerHTML = $a
   }
-  // ?p=... (prompt)
-  else if (p.has('p')) {
-    let a = g('a'), m = g('m')
-    let ctx = await o('f', 'readonly', 'get', k).then(r => r?.value || '')
-    let res = await fetch(`https://${g('h')||'generativelanguage.googleapis.com'}/v1beta/models/${m}:generateContent?key=${a}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: `<page>${ctx}</page><prompt>${p.get('p')}</prompt>` }] }] })
-    })
-    let j = await res.json()
-    if (!res.ok) throw j.error
-    v = j.candidates[0].content.parts[0].text
-    await o('f', 'readwrite', 'put', { k, value: v })
-    p.delete('p')
-    clean = true
-  }
 
-  // Clean the URL if a param was processed
-  if (clean) {
-    history.replaceState(null, '', `${u.pathname}?${p}${location.hash}`)
-  }
+  // Listen for URL changes and run the executor
+  window.addEventListener('hashchange', run)
 
-  // ?x=... (execute)
-  if (p.has('x')) {
-    eval(decodeURIComponent(p.get('x')))
-  }
-
-  // Rendering
-  // Fetch boot content promises (?b=...)
-  let bp = p.get('b')?.split(',').map(key =>
-    o('f', 'readonly', 'get', key).then(r => r?.value)
-  ) || []
-
-  // Get main content promise (use 'v' if set, otherwise fetch from DB)
-  let vp = v !== undefined
-    ? v
-    : o('f', 'readonly', 'get', k).then(r => r?.value || '')
-
-  // Wait for all content promises to resolve
-  let [bc, vc] = await Promise.all([
-    Promise.all(bp).then(c => c.filter(Boolean).join('\n')),
-    vp
-  ])
-  
-  // Render the final content to the page body
-  b.innerHTML = bc + vc
+  // Run the executor on initial page load
+  run()
 })()</script>
 </body>
 </html>

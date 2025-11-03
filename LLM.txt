@@ -1,0 +1,6 @@
+# Important
+- THIS MUST FIT IN A QR CODE SO USE SHORT CREATIVE TECHNIQUES (but dont obfuscate code since it runs thru a minifier anyways)
+- USE COMMENTS TO ANNOTATE COMPLEX THINGS (these get removed on build)
+- DO NOT USE SEMICOLONS - they are not aesthetic
+- DO NOT USE const USE let INSTEAD - this saves you 2 bytes per declaration
+- USE && AND || TO SHORTHAND IF CONDITIONALS (eg `a && b()` instead of `if (a) {b()}`
