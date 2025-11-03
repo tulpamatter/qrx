@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>:root{color-scheme:light dark}</style>
+</head>
+<body>
+<script>;(async () => {
+  // Setup
+  let d = document, b = d.body,
+    u = new URL(location), p = u.searchParams,
+    g = (k => p.get(k) || localStorage.getItem(k)),
+
+  // Database Connection
+  // Opens 'os' db, creates 'f' (files) and 'h' (history) stores if needed.
+  db = await new Promise(r => {
+    let R = indexedDB.open('os', 1)
+    R.onupgradeneeded = e => {
+      let s = e.target.result
+      s.createObjectStore('f', { keyPath: 'k' })
+      s.createObjectStore('h', { autoIncrement: true })
+    }
+    R.onsuccess = e => r(e.target.result)
+  }),
+
+  // DB Operation Helper
+  // o(store, mode, type, ...args) -> e.g., o('f', 'readonly', 'get', 'home')
+  o = (s, m, t, ...a) => new Promise(r => {
+    db.transaction(s, m).objectStore(s)[t](...a).onsuccess = e => r(e.target.result)
+  }),
+
+  // Core Logic
+  // Get key from URL hash, default to 'home'
+  k = (location.hash.slice(1) || 'home'),
+  v, // Will hold the main page content/value
+  clean = false // Flag to clean the URL
+
+  // Log the visit to history
+  await o('h', 'readwrite', 'add', { t: new Date(), u: location.href })
+
+  // ?w=... (write)
+  if (p.has('w')) {
+    v = decodeURIComponent(p.get('w'))
+    await o('f', 'readwrite', 'put', { k, value: v })
+    p.delete('w')
+    clean = true
+  }
+  // ?p=... (prompt)
+  else if (p.has('p')) {
+    let a = g('a'), m = g('m')
+    let ctx = await o('f', 'readonly', 'get', k).then(r => r?.value || '')
+    let res = await fetch(`https://${g('h')||'generativelanguage.googleapis.com'}/v1beta/models/${m}:generateContent?key=${a}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: `<page>${ctx}</page><prompt>${p.get('p')}</prompt>` }] }] })
+    })
+    let j = await res.json()
+    if (!res.ok) throw j.error
+    v = j.candidates[0].content.parts[0].text
+    await o('f', 'readwrite', 'put', { k, value: v })
+    p.delete('p')
+    clean = true
+  }
+
+  // Clean the URL if a param was processed
+  if (clean) {
+    history.replaceState(null, '', `${u.pathname}?${p}${location.hash}`)
+  }
+
+  // ?x=... (execute)
+  if (p.has('x')) {
+    eval(decodeURIComponent(p.get('x')))
+  }
+
+  // Rendering
+  // Fetch boot content promises (?b=...)
+  let bp = p.get('b')?.split(',').map(key =>
+    o('f', 'readonly', 'get', key).then(r => r?.value)
+  ) || []
+
+  // Get main content promise (use 'v' if set, otherwise fetch from DB)
+  let vp = v !== undefined
+    ? v
+    : o('f', 'readonly', 'get', k).then(r => r?.value || '')
+
+  // Wait for all content promises to resolve
+  let [bc, vc] = await Promise.all([
+    Promise.all(bp).then(c => c.filter(Boolean).join('\n')),
+    vp
+  ])
+  
+  // Render the final content to the page body
+  b.innerHTML = bc + vc
+})()</script>
+</body>
+</html>
