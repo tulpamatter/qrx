@@ -49,7 +49,7 @@ To use the generative features (`?p`), you must configure an LLM provider. This 
 ```javascript
 // Example configuration for Google's Generative AI API
 localStorage.setItem('k', 'YOUR_API_KEY');
-localStorage.setItem('h', 'generativelanguage.googleapis.com'); // Or any openAI api capable endpoint
+localStorage.setItem('h', 'generativelanguage.googleapis.com');
 localStorage.setItem('m', 'gemini-2.5-flash'); // Or any other compatible model
 ```
 
@@ -81,7 +81,7 @@ These commands perform an operation, often transforming the accumulator.
 *   **Example:** `/#story?p=continue the story`
 
 #### `?x=<script>`
-**Execute:** Executes a JavaScript string. The script has access to the live accumulator (`$a`), the savable source (`$s`), and the database helper functions (`$r`, `o`) for complex, agentic operations.
+**Execute:** Executes a JavaScript string. The script has access to the live accumulator (`$a`), the savable source (`$s`), and the database helper functions (`$r`, `$rf`, `o`) for complex, agentic operations.
 
 *   **Example:** `/#home?x=alert($a)`
 
@@ -103,8 +103,9 @@ These commands modify the state for subsequent commands in the stream.
 
 #### `?s=<page_name>`
 **System Prompt:** Sets the system prompt for subsequent `?p` commands by loading the content of the specified page.
+*   **Fuzzy Search:** Use a `*` wildcard to load all pages with a given prefix (e.g., `s=prompts/rules/*`). The content of all matched pages will be concatenated and used as the system prompt.
 
-*   **Example:** `/#code?s=coder-persona&p=write a function`
+*   **Example:** `/#code?s=rules/coder/*&p=write a function`
 
 ---
 
@@ -112,10 +113,13 @@ These commands modify the state for subsequent commands in the stream.
 
 #### `?b=<page_name>`
 **Boot:** A temporary, runtime-only prepend. It loads the content of `<page_name>` and prepends it to the live accumulator. This is ideal for loading CSS, libraries, or dependencies. **This change is not saved** to the target page's content.
+*   **Fuzzy Search:** Use a `*` wildcard to load all pages with a given prefix (e.g., `b=libs/*`).
+    *   **Warning:** Files are loaded alphabetically. For dependencies with a required load order, it is crucial to name files with numerical prefixes (e.g., `01-jquery.js`, `02-plugin.js`).
 
-*   **Example:** `/#app?b=styles.css&b=runtime.js`
+*   **Example:** `/#app?b=styles/*&b=libs/*`
 
 #### `@<page_name>` (in prompts)
 **Inject:** When used inside a `?p` prompt, it injects the content of the specified page directly into the prompt string before sending it to the LLM. This is for providing specific context.
+*   **Fuzzy Search:** Use a `*` wildcard to inject a collection of pages (e.g., `@knowledge/facts/*`). The content of each matched page will be wrapped in `<context>` tags to provide clear structure for the LLM.
 
-*   **Example:** `/#summary?p=summarize this article: @long-article`
+*   **Example:** `/#summary?p=Summarize @article using these rules: @rules/*`
