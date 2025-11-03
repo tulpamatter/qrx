@@ -10,7 +10,7 @@
       b = d.body,
       g = k => localStorage.getItem(k)
 
-  // Connect to the IndexedDB database
+  // Connect to IndexedDB, create stores if needed
   let db = await new Promise(r => {
     let R = indexedDB.open('os', 1)
     R.onupgradeneeded = e => {
@@ -21,29 +21,37 @@
     R.onsuccess = e => r(e.target.result)
   })
 
-  // Database operation helpers
+  // Database operation helpers: o(store, op), $r(read), $rf(read fuzzy)
   let o = (s, t, ...a) => new Promise(r => {
         db.transaction(s, 'readwrite').objectStore(s)[t](...a).onsuccess = e => r(e.target.result)
       }),
-      $r = k => o('f', 'get', k).then(r => r?.value || '')
+      $r = k => o('f', 'get', k).then(r => r?.value || ''),
+      $rf = (P, wrap) => new Promise(async R => {
+        let B = [],
+            C = db.transaction('f').objectStore('f').openCursor(IDBKeyRange.bound(P, P + '\uffff'))
+        C.onsuccess = e => {
+          let c = e.target.result
+          c ? (B.push(wrap ? `<context source="${c.key}">${c.value.value}</context>` : c.value.value), c.continue()) : R(B)
+        }
+      })
 
-  // The main execution function
+  // The main execution function, runs on load and hash change
   let run = async () => {
-    // Log the current URL to the history before execution
+    // Log every URL change to history for auditability
     await o('h', 'add', { t: new Date(), u: location.href })
 
-    // Parse the page key and command string from the URL
+    // Parse page key ($p) and command string ($cmd) from URL
     let u = location.hash.slice(1),
         [$c, $cmd] = u.split('?'),
         $p = $c || 'home'
 
-    // Initialize the two states
-    let $s = await $r($p)      // The savable document content
-    let $a = $s             // The live, in-memory content for this run
+    // Initialize savable source ($s) and live accumulator ($a)
+    let $s = await $r($p),
+        $a = $s
 
-    // Main execution block, only runs if there are commands
+    // Main command processing block
     if ($cmd) {
-      // Initialize the state for this command stream
+      // Initialize per-run state (model, keys, target, etc)
       let S = {
         h: g('h') || 'generativelanguage.googleapis.com',
         m: g('m') || 'gemini-2.5-flash',
@@ -55,36 +63,62 @@
       // Create an ordered queue of commands
       let cmds = $cmd.split('&')
 
-      // Loop through and execute each command
+      // Sequentially execute each command from the URL
       for (let cmd of cmds) {
         let [K, ...V] = cmd.split('='),
             v = decodeURIComponent(V.join('='))
         
-        // State-Setting Commands
-        if ('hmks'.includes(K)) S[K] = v
+        // State-setting commands modify the S object for subsequent actions
+        if ('hmk'.includes(K)) S[K] = v
+        else if (K === 's') S.s = v
         else if (K === 't') S.t = v || $p
-        // Action Commands
-        else if (K === 'w') {
+        // Action commands transform the accumulator ($a) or source ($s)
+        else if (K === 'w') { // 'w': Destructive write to source and accumulator
           $s = v
           $a = v
           await o('f', 'put', { k: S.t, value: $s })
-        } else if (K === 'b') {
-          let B = await $r(v)
-          $a = B + $a
-        } else if (K === 'x') {
+        } else if (K === 'b') { // 'b': Prepend to accumulator (runtime only)
+          if (v.endsWith('*')) {
+            let P = v.slice(0, -1),
+                B = await $rf(P)
+            $a = B.join('\n') + $a
+          } else {
+            let B = await $r(v)
+            $a = B + $a
+          }
+        } else if (K === 'x') { // 'x': Execute arbitrary JS with access to state
           eval(v)
-        } else if (K === 'p') {
-          let cc = $a
-          let sp = await $r(S.s)
-          let pt = v
-          let injs = v.match(/@\w+/g) || []
+        } else if (K === 'p') { // 'p': The main generative command
+          let cc = $a,
+              sp = '',
+              pt = v,
+              injs = v.match(/@[\w\/-]+\*?/g) || []
 
-          for (let inj of injs) {
-            let injKey = inj.slice(1)
-            let injContent = await $r(injKey)
-            pt = pt.replace(inj, injContent)
+          // Gather system prompt (sp), supporting fuzzy search
+          if (S.s) {
+            if (S.s.endsWith('*')) {
+              let P = S.s.slice(0, -1),
+                  B = await $rf(P)
+              sp = B.join('\n')
+            } else {
+              sp = await $r(S.s)
+            }
           }
 
+          // Process @-injections in the prompt text (pt)
+          for (let inj of injs) {
+            if (inj.endsWith('*')) {
+              let P = inj.slice(1, -1),
+                  B = await $rf(P, true)
+              pt = pt.replace(inj, B.join('\n'))
+            } else {
+              let injKey = inj.slice(1),
+                  injContent = await $r(injKey)
+              pt = pt.replace(inj, injContent)
+            }
+          }
+
+          // Assemble payload and call the LLM
           let B = {
             contents: [{
               parts: [{ text: `<system>${sp}</system><page>${cc}</page><prompt>${pt}</prompt>` }]
@@ -96,26 +130,25 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(B)
           })
-          let j = await Z.json()
+          let j = await Z.json(),
+              R = j.candidates[0].content.parts[0].text
           if (!Z.ok) throw j.error
-          let R = j.candidates[0].content.parts[0].text
           
+          // Overwrite source and accumulator with the result
           $s = $a = R
           await o('f', 'put', { k: S.t, value: $s })
         }
       }
-      // Clean the URL, removing commands
+      // Clean the URL, removing commands after execution
       history.replaceState(null, '', `/#${$p}`)
     }
 
-    // Paint the final state of the accumulator to the DOM
+    // Paint the final, live accumulator state to the DOM
     b.innerHTML = $a
   }
 
-  // Listen for URL changes and run the executor
+  // Attach the executor to URL changes and run on initial load
   window.addEventListener('hashchange', run)
-
-  // Run the executor on initial page load
   run()
 })()</script>
 </body>
