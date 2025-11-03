@@ -46,8 +46,10 @@
         $p = $c || 'home'
 
     // Initialize savable source ($s) and live accumulator ($a)
-    let $s = await $r($p),
-        $a = $s
+    // Prepend the content of the global #boot file to the accumulator for every run
+    let G = await $r('boot'),
+        $s = await $r($p),
+        $a = G + $s
 
     // Main command processing block
     if ($cmd) {
@@ -143,8 +145,17 @@
       history.replaceState(null, '', `/#${$p}`)
     }
 
-    // Paint the final, live accumulator state to the DOM
+    // Paint the final state to the DOM and re-hydrate scripts to ensure execution
     b.innerHTML = $a
+    b.querySelectorAll('script').forEach(s => {
+      let S = d.createElement('script')
+      // Copy all attributes from the inert script to the live one
+      for (let a of s.attributes) {
+        S.setAttribute(a.name, a.value)
+      }
+      S.textContent = s.textContent
+      s.replaceWith(S)
+    })
   }
 
   // Attach the executor to URL changes and run on initial load
