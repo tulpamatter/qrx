@@ -5,30 +5,47 @@
 </head>
 <body>
 <script>;(async () => {
+  // URL Normalization and Redirection
+  let $L = location,
+      $P = $L.pathname.slice(1).replace(/^\/|\/$/g, ''),
+      $H = $L.hash.slice(1).replace(/^\/|\/$/g, '')
+  if (!$P || !$H) {
+    $L.replace(`/${$P || 'home'}#${$H || 'home'}`)
+    return
+  }
+
   // Basic setup and shorthands
   let d = document,
       b = d.body,
       g = k => localStorage.getItem(k)
 
-  // Connect to IndexedDB, create stores if needed
-  let db = await new Promise(r => {
-    let R = indexedDB.open('os', 1)
-    R.onupgradeneeded = e => {
-      let s = e.target.result
-      s.createObjectStore('f', { keyPath: 'k' })
-      s.createObjectStore('h', { autoIncrement: true })
-    }
-    R.onsuccess = e => r(e.target.result)
-  })
+  // Multi-database setup
+  let D = {}, // DB connection cache
+      N = $P, // Current DB Name from normalized path
+      // Helper to get/open a DB connection from cache or new
+      GDB = n => {
+        if (!D[n]) D[n] = new Promise(r => {
+          let R = indexedDB.open(n, 1)
+          R.onupgradeneeded = e => {
+            let s = e.target.result
+            s.createObjectStore('f', { keyPath: 'k' })
+            s.createObjectStore('h', { autoIncrement: true })
+          }
+          R.onsuccess = e => r(e.target.result)
+        })
+        return D[n]
+      },
+      db = await GDB(N) // Main DB connection
 
-  // Database operation helpers: o(store, op), $r(read), $rf(read fuzzy)
-  let o = (s, t, ...a) => new Promise(r => {
+  // Database operation helpers now accept an optional DB handle
+  let o = (db, s, t, ...a) => new Promise(r => {
         db.transaction(s, 'readwrite').objectStore(s)[t](...a).onsuccess = e => r(e.target.result)
       }),
-      $r = k => o('f', 'get', k).then(r => r?.value || ''),
-      $rf = (P, wrap) => new Promise(async R => {
+      $r = async (k, n = N) => { let d = await GDB(n); return o(d, 'f', 'get', k).then(r => r?.value || '') },
+      $rf = (P, wrap, n = N) => new Promise(async R => {
         let B = [],
-            C = db.transaction('f').objectStore('f').openCursor(IDBKeyRange.bound(P, P + '\uffff'))
+            d = await GDB(n),
+            C = d.transaction('f').objectStore('f').openCursor(IDBKeyRange.bound(P, P + '\uffff'))
         C.onsuccess = e => {
           let c = e.target.result
           c ? (B.push(wrap ? `<context source="${c.key}">${c.value.value}</context>` : c.value.value), c.continue()) : R(B)
@@ -38,18 +55,17 @@
   // The main execution function, runs on load and hash change
   let run = async () => {
     // Log every URL change to history for auditability
-    await o('h', 'add', { t: new Date(), u: location.href })
+    await o(db, 'h', 'add', { t: new Date(), u: $L.href })
 
     // Parse page key ($p) and command string ($cmd) from URL
-    let u = location.hash.slice(1),
+    let u = $L.hash.slice(1).replace(/^\/|\/$/g, ''),
         [$c, $cmd] = u.split('?'),
         $p = $c || 'home'
 
     // Initialize savable source ($s) and live accumulator ($a)
-    // Prepend the content of the global #boot file to the accumulator for every run
-    let G = await $r('boot'),
+    let GB = await $r('boot'),
         $s = await $r($p),
-        $a = G + $s
+        $a = GB + $s
 
     // Main command processing block
     if ($cmd) {
@@ -70,54 +86,47 @@
         let [K, ...V] = cmd.split('='),
             v = decodeURIComponent(V.join('='))
         
-        // State-setting commands modify the S object for subsequent actions
+        // State-setting commands
         if ('hmk'.includes(K)) S[K] = v
         else if (K === 's') S.s = v
         else if (K === 't') S.t = v || $p
-        // Action commands transform the accumulator ($a) or source ($s)
-        else if (K === 'w') { // 'w': Destructive write to source and accumulator
+        // Action commands
+        else if (K === 'w') {
           $s = v
           $a = v
-          await o('f', 'put', { k: S.t, value: $s })
-        } else if (K === 'b') { // 'b': Prepend to accumulator (runtime only)
-          if (v.endsWith('*')) {
-            let P = v.slice(0, -1),
-                B = await $rf(P)
-            $a = B.join('\n') + $a
-          } else {
-            let B = await $r(v)
-            $a = B + $a
+          await o(db, 'f', 'put', { k: S.t, value: $s })
+        } else if (K === 'b' || K === 's') { // Combined handler for b and s
+          let [dbn, key] = S.s.includes('#') ? S.s.split('#') : [N, S.s],
+              isFuzzy = key.endsWith('*'),
+              P = isFuzzy ? key.slice(0, -1) : key
+
+          if (K === 'b') {
+             [dbn, key] = v.includes('#') ? v.split('#') : [N, v]
+             isFuzzy = key.endsWith('*')
+             P = isFuzzy ? key.slice(0, -1) : key
+             let B = isFuzzy ? await $rf(P, false, dbn) : [await $r(P, dbn)]
+             $a = B.join('\n') + $a
           }
-        } else if (K === 'x') { // 'x': Execute arbitrary JS with access to state
+          if (K === 's') {
+             let B = isFuzzy ? await $rf(P, false, dbn) : [await $r(P, dbn)]
+             S.s = B.join('\n')
+          }
+        } else if (K === 'x') {
           eval(v)
-        } else if (K === 'p') { // 'p': The main generative command
+        } else if (K === 'p') {
           let cc = $a,
-              sp = '',
+              sp = S.s, // Use the already-processed system prompt state
               pt = v,
-              injs = v.match(/@[\w\/-]+\*?/g) || []
+              injs = v.match(/@(?:[\w-]+#)?[\w\/-]+\*?/g) || []
 
-          // Gather system prompt (sp), supporting fuzzy search
-          if (S.s) {
-            if (S.s.endsWith('*')) {
-              let P = S.s.slice(0, -1),
-                  B = await $rf(P)
-              sp = B.join('\n')
-            } else {
-              sp = await $r(S.s)
-            }
-          }
-
-          // Process @-injections in the prompt text (pt)
           for (let inj of injs) {
-            if (inj.endsWith('*')) {
-              let P = inj.slice(1, -1),
-                  B = await $rf(P, true)
-              pt = pt.replace(inj, B.join('\n'))
-            } else {
-              let injKey = inj.slice(1),
-                  injContent = await $r(injKey)
-              pt = pt.replace(inj, injContent)
-            }
+            let key = inj.slice(1),
+                [dbn, fileKey] = key.includes('#') ? key.split('#') : [N, key],
+                isFuzzy = fileKey.endsWith('*'),
+                P = isFuzzy ? fileKey.slice(0, -1) : fileKey
+
+            let B = isFuzzy ? await $rf(P, true, dbn) : [await $r(P, dbn)]
+            pt = pt.replace(inj, B.join('\n'))
           }
 
           // Assemble payload and call the LLM
@@ -136,23 +145,19 @@
               R = j.candidates[0].content.parts[0].text
           if (!Z.ok) throw j.error
           
-          // Overwrite source and accumulator with the result
           $s = $a = R
-          await o('f', 'put', { k: S.t, value: $s })
+          await o(db, 'f', 'put', { k: S.t, value: $s })
         }
       }
-      // Clean the URL, removing commands after execution
-      history.replaceState(null, '', `/#${$p}`)
+      // Clean the URL
+      history.replaceState(null, '', `/${N}#${$p}`)
     }
 
-    // Paint the final state to the DOM and re-hydrate scripts to ensure execution
+    // Paint the final state and re-hydrate scripts
     b.innerHTML = $a
     b.querySelectorAll('script').forEach(s => {
       let S = d.createElement('script')
-      // Copy all attributes from the inert script to the live one
-      for (let a of s.attributes) {
-        S.setAttribute(a.name, a.value)
-      }
+      for (let a of s.attributes) S.setAttribute(a.name, a.value)
       S.textContent = s.textContent
       s.replaceWith(S)
     })
